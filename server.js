@@ -1,120 +1,164 @@
-// PrimeBoard Relay Server
-// -------------------------------------------------------------
-// A tiny WebSocket relay. It does two jobs only:
-//   1. Forward drawing events between everyone in the same room.
-//   2. Remember each room's "locked" state and who the teacher is,
-//      so the lock survives even if students refresh their page.
-//
-// It does NOT store drawings permanently, run a database, or know
-// anything about Excalidraw's internal format -- it just relays
-// whatever JSON messages clients send it. This keeps it small,
-// cheap to host, and easy to understand.
-// -------------------------------------------------------------
-
+const http = require('http');
 const WebSocket = require('ws');
 
-const PORT = process.env.PORT || 8080;
-const wss = new WebSocket.Server({ port: PORT });
+const PORT = process.env.PORT || 3000;
 
-// rooms: roomCode -> {
-//   locked: boolean,            // true = only teacher can draw
-//   teacherSocket: ws | null,   // the socket that owns the lock switch
-//   clients: Map<ws, { name, role }>
-// }
-const rooms = new Map();
-
-function getRoom(code) {
-    if (!rooms.has(code)) {
-        rooms.set(code, { locked: false, teacherSocket: null, clients: new Map() });
-    }
-    return rooms.get(code);
-}
-
-function broadcast(room, payload, exceptSocket) {
-    const msg = JSON.stringify(payload);
-    for (const client of room.clients.keys()) {
-        if (client !== exceptSocket && client.readyState === WebSocket.OPEN) {
-            client.send(msg);
-        }
-    }
-}
-
-function roster(room) {
-    return Array.from(room.clients.values()).map(c => ({ name: c.name, role: c.role }));
-}
-
-wss.on('connection', (ws) => {
-    let joinedRoom = null;
-    let roomCode = null;
-
-    ws.on('message', (raw) => {
-        let data;
-        try { data = JSON.parse(raw); } catch { return; }
-
-        // --- JOIN: first message a client sends ---
-        if (data.type === 'join') {
-            roomCode = String(data.room || '').trim();
-            if (!roomCode) return;
-            joinedRoom = getRoom(roomCode);
-
-            const role = data.role === 'teacher' ? 'teacher' : 'student';
-            const name = (data.name || 'Guest').toString().slice(0, 40);
-            joinedRoom.clients.set(ws, { name, role });
-
-            if (role === 'teacher') {
-                joinedRoom.teacherSocket = ws;
-            }
-
-            // Tell the new client the current lock state + who else is here
-            ws.send(JSON.stringify({
-                type: 'state',
-                locked: joinedRoom.locked,
-                roster: roster(joinedRoom)
-            }));
-
-            // Tell everyone else the roster changed
-            broadcast(joinedRoom, { type: 'roster', roster: roster(joinedRoom) }, ws);
-            return;
-        }
-
-        if (!joinedRoom) return; // ignore anything before join
-
-        // --- TEACHER toggles the lock ---
-        if (data.type === 'set-lock') {
-            const me = joinedRoom.clients.get(ws);
-            if (!me || me.role !== 'teacher') return; // only teacher may lock/unlock
-            joinedRoom.locked = !!data.locked;
-            broadcast(joinedRoom, { type: 'lock-changed', locked: joinedRoom.locked }, null);
-            return;
-        }
-
-        // --- DRAWING EVENTS: relay to everyone else in the room ---
-        if (data.type === 'scene-update' || data.type === 'pointer-update') {
-            const me = joinedRoom.clients.get(ws);
-            if (!me) return;
-
-            // Enforce the lock server-side: students can't sneak drawing
-            // events through even if they tamper with their own client.
-            if (data.type === 'scene-update' && joinedRoom.locked && me.role !== 'teacher') {
-                return; // silently drop
-            }
-            broadcast(joinedRoom, data, ws);
-            return;
-        }
-    });
-
-    ws.on('close', () => {
-        if (!joinedRoom) return;
-        joinedRoom.clients.delete(ws);
-        if (joinedRoom.teacherSocket === ws) {
-            joinedRoom.teacherSocket = null;
-        }
-        broadcast(joinedRoom, { type: 'roster', roster: roster(joinedRoom) }, null);
-        // Clean up empty rooms so memory doesn't grow forever
-        if (joinedRoom.clients.size === 0 && roomCode) {
-            rooms.delete(roomCode);
-        }
-    });
+const server = http.createServer((req, res) => {
+  res.writeHead(200, { 'Content-Type': 'text/plain' });
+  res.end('PrimeBoard Relay Server is running!');
 });
 
-console.log(`PrimeBoard relay server running on port ${PORT}`);
+const wss = new WebSocket.Server({ server });
+
+// Store connected users by room
+const rooms = new Map();
+
+wss.on('connection', (ws) => {
+  console.log('New client connected');
+
+  ws.on('message', (message) => {
+    try {
+      const data = JSON.parse(message);
+      
+      // ==========================================
+      // HANDLE EMAIL INVITES VIA BREVO
+      // ==========================================
+      if (data.type === 'email-invites') {
+        console.log(`Sending Brevo invites to room ${data.room}...`);
+        
+        // Your Brevo Credentials
+        const BREVO_API_KEY = 'const BREVO_API_KEY=process.env.BREVO_API_KEY'; 
+        const SENDER_EMAIL = 'primespiritmentors@gmail.com'; 
+
+        const recipients = data.emails.map(email => ({ email: email }));
+
+        const emailPayload = {
+          sender: { name: "Prime Spirit Mentors", email: SENDER_EMAIL },
+          to: recipients,
+          subject: `PrimeBoard Invitation - Room: ${data.room}`,
+          htmlContent: `
+            <div style="font-family: sans-serif; padding: 20px; background: #f4f4f4;">
+              <h2 style="color: #00C6FF;">PrimeBoard Invitation</h2>
+              <p>Hello!</p>
+              <p>Your teacher, <strong>${data.teacherName}</strong>, has invited you to join a live class on PrimeBoard.</p>
+              <p><strong>Room Code:</strong> ${data.room}</p>
+              <a href="${data.inviteUrl}" style="background: #00C6FF; color: #000; padding: 12px 24px; text-decoration: none; border-radius: 8px; display: inline-block; font-weight: bold; margin-top: 10px;">Join Live Board</a>
+              <p style="margin-top: 20px; font-size: 12px; color: #777;">Prime Spirit Mentors</p>
+            </div>
+          `
+        };
+
+        fetch('https://api.brevo.com/v3/smtp/email', {
+          method: 'POST',
+          headers: {
+            'accept': 'application/json',
+            'api-key': BREVO_API_KEY,
+            'content-type': 'application/json'
+          },
+          body: JSON.stringify(emailPayload)
+        })
+        .then(response => response.json())
+        .then(result => {
+          console.log('Brevo Success:', result);
+          ws.send(JSON.stringify({ type: 'email-sent', success: true }));
+        })
+        .catch(error => {
+          console.error('Brevo Error:', error);
+          ws.send(JSON.stringify({ type: 'email-sent', success: false, error: error.message }));
+        });
+
+        return; 
+      }
+
+      // ==========================================
+      // HANDLE JOIN ROOM
+      // ==========================================
+      if (data.type === 'join') {
+        const room = data.room;
+        if (!rooms.has(room)) {
+          rooms.set(room, new Set());
+        }
+        rooms.get(room).add(ws);
+        
+        ws.room = room;
+        ws.userName = data.name;
+        ws.userRole = data.role;
+
+        ws.send(JSON.stringify({ 
+          type: 'state', 
+          locked: false 
+        }));
+
+        broadcastRoster(room);
+        console.log(`${data.name} joined room ${room}`);
+        return;
+      }
+
+      // ==========================================
+      // HANDLE SCENE UPDATES (Drawing sync)
+      // ==========================================
+      if (ws.room && data.type === 'scene-update') {
+        rooms.get(ws.room).forEach((client) => {
+          if (client !== ws && client.readyState === WebSocket.OPEN) {
+            client.send(message);
+          }
+        });
+        return;
+      }
+
+      // ==========================================
+      // HANDLE LOCK/UNLOCK BOARD
+      // ==========================================
+      if (ws.room && data.type === 'set-lock') {
+        rooms.get(ws.room).forEach((client) => {
+          if (client.readyState === WebSocket.OPEN) {
+            client.send(JSON.stringify({
+              type: 'lock-changed',
+              locked: data.locked
+            }));
+          }
+        });
+        return;
+      }
+
+    } catch (error) {
+      console.error('Error parsing message:', error);
+    }
+  });
+
+  ws.on('close', () => {
+    console.log('Client disconnected');
+    if (ws.room && rooms.has(ws.room)) {
+      rooms.get(ws.room).delete(ws);
+      if (rooms.get(ws.room).size === 0) {
+        rooms.delete(ws.room);
+      } else {
+        broadcastRoster(ws.room);
+      }
+    }
+  });
+});
+
+function broadcastRoster(room) {
+  if (!rooms.has(room)) return;
+  
+  const users = Array.from(rooms.get(room)).map(client => ({
+    name: client.userName || 'Anonymous',
+    role: client.userRole || 'student'
+  }));
+
+  const message = JSON.stringify({
+    type: 'roster',
+    users: users
+  });
+
+  rooms.get(room).forEach((client) => {
+    if (client.readyState === WebSocket.OPEN) {
+      client.send(message);
+    }
+  });
+}
+
+server.listen(PORT, () => {
+  console.log(`Server listening on port ${PORT}`);
+});
