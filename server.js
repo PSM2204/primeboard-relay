@@ -9,8 +9,6 @@ const server = http.createServer((req, res) => {
 });
 
 const wss = new WebSocket.Server({ server });
-
-// Store connected users by room
 const rooms = new Map();
 
 wss.on('connection', (ws) => {
@@ -19,13 +17,13 @@ wss.on('connection', (ws) => {
   ws.on('message', (message) => {
     try {
       const data = JSON.parse(message);
-      
+
       // ==========================================
       // HANDLE EMAIL INVITES VIA BREVO
       // ==========================================
       if (data.type === 'email-invites') {
         console.log(`Sending Brevo invites to room ${data.room}...`);
-        
+
         const BREVO_API_KEY = process.env.BREVO_API_KEY;
         const SENDER_EMAIL = 'primespiritmentors@gmail.com';
 
@@ -66,7 +64,7 @@ wss.on('connection', (ws) => {
           ws.send(JSON.stringify({ type: 'email-sent', success: false, error: error.message }));
         });
 
-        return; 
+        return;
       }
 
       // ==========================================
@@ -78,16 +76,12 @@ wss.on('connection', (ws) => {
           rooms.set(room, new Set());
         }
         rooms.get(room).add(ws);
-        
+
         ws.room = room;
         ws.userName = data.name;
         ws.userRole = data.role;
 
-        ws.send(JSON.stringify({ 
-          type: 'state', 
-          locked: false 
-        }));
-
+        ws.send(JSON.stringify({ type: 'state', locked: false }));
         broadcastRoster(room);
         console.log(`${data.name} joined room ${room}`);
         return;
@@ -111,9 +105,22 @@ wss.on('connection', (ws) => {
       if (ws.room && data.type === 'set-lock') {
         rooms.get(ws.room).forEach((client) => {
           if (client.readyState === WebSocket.OPEN) {
+            client.send(JSON.stringify({ type: 'lock-changed', locked: data.locked }));
+          }
+        });
+        return;
+      }
+
+      // ==========================================
+      // HANDLE TIMER SYNC
+      // ==========================================
+      if (ws.room && data.type === 'timer-update') {
+        rooms.get(ws.room).forEach((client) => {
+          if (client.readyState === WebSocket.OPEN) {
             client.send(JSON.stringify({
-              type: 'lock-changed',
-              locked: data.locked
+              type: 'timer-update',
+              action: data.action,
+              timeLeft: data.timeLeft
             }));
           }
         });
@@ -140,17 +147,11 @@ wss.on('connection', (ws) => {
 
 function broadcastRoster(room) {
   if (!rooms.has(room)) return;
-  
   const users = Array.from(rooms.get(room)).map(client => ({
     name: client.userName || 'Anonymous',
     role: client.userRole || 'student'
   }));
-
-  const message = JSON.stringify({
-    type: 'roster',
-    users: users
-  });
-
+  const message = JSON.stringify({ type: 'roster', users: users });
   rooms.get(room).forEach((client) => {
     if (client.readyState === WebSocket.OPEN) {
       client.send(message);
