@@ -27,7 +27,7 @@ wss.on('connection', (ws) => {
         console.log(`Sending Brevo invites to room ${data.room}...`);
         
         // Your Brevo Credentials
-        const BREVO_API_KEY = const BREVO_API_KEY=process.env.BREVO_API_KEY; 
+        const BREVO_API_KEY =process.env.BREVO_API_KEY; 
         const SENDER_EMAIL = 'primespiritmentors@gmail.com'; 
 
         const recipients = data.emails.map(email => ({ email: email }));
