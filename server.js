@@ -26,9 +26,8 @@ wss.on('connection', (ws) => {
       if (data.type === 'email-invites') {
         console.log(`Sending Brevo invites to room ${data.room}...`);
         
-        // Your Brevo Credentials
-        const BREVO_API_KEY =process.env.BREVO_API_KEY; 
-        const SENDER_EMAIL = 'primespiritmentors@gmail.com'; 
+        const BREVO_API_KEY = process.env.BREVO_API_KEY;
+        const SENDER_EMAIL = 'primespiritmentors@gmail.com';
 
         const recipients = data.emails.map(email => ({ email: email }));
 
@@ -40,7 +39,7 @@ wss.on('connection', (ws) => {
             <div style="font-family: sans-serif; padding: 20px; background: #f4f4f4;">
               <h2 style="color: #00C6FF;">PrimeBoard Invitation</h2>
               <p>Hello!</p>
-              <p>Your teacher, <strong>${data.teacherName}</strong>, has invited you to join a live class on PrimeBoard.</p>
+              <p>Your teacher, <strong>${data.teacherName || data.teacher || 'your teacher'}</strong>, has invited you to join a live class on PrimeBoard.</p>
               <p><strong>Room Code:</strong> ${data.room}</p>
               <a href="${data.inviteUrl}" style="background: #00C6FF; color: #000; padding: 12px 24px; text-decoration: none; border-radius: 8px; display: inline-block; font-weight: bold; margin-top: 10px;">Join Live Board</a>
               <p style="margin-top: 20px; font-size: 12px; color: #777;">Prime Spirit Mentors</p>
